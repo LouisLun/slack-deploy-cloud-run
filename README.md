@@ -147,59 +147,121 @@ The OAuth scope requested is `repo` + `workflow`, which allows reading PRs/relea
 
 ## Cloud Run Deployment
 
-### Prerequisites
+Push to `main` triggers `.github/workflows/deploy.yml` automatically — it builds the Docker image, pushes to Artifact Registry, and deploys to Cloud Run.
 
-- [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) installed and authenticated.
-- A GCS bucket with the config JSON uploaded.
-- The Cloud Run service account must have the `storage.objects.get` role on the bucket.
+### One-time GCP Setup
 
-### 1. Build and push the container
+#### 1. Create Artifact Registry repository
+
+```bash
+gcloud artifacts repositories create slack-deploy \
+  --repository-format=docker \
+  --location=asia-east1
+```
+
+#### 2. Create a service account for CI
+
+```bash
+gcloud iam service-accounts create github-actions-sa \
+  --display-name="GitHub Actions Deploy SA"
+
+SA_EMAIL=github-actions-sa@<PROJECT_ID>.iam.gserviceaccount.com
+
+gcloud projects add-iam-policy-binding <PROJECT_ID> \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/run.developer"
+
+gcloud projects add-iam-policy-binding <PROJECT_ID> \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/artifactregistry.writer"
+
+gcloud projects add-iam-policy-binding <PROJECT_ID> \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/iam.serviceAccountUser"
+```
+
+#### 3. Set up Workload Identity Federation
+
+```bash
+PROJECT_NUMBER=$(gcloud projects describe <PROJECT_ID> --format='value(projectNumber)')
+
+# Create pool
+gcloud iam workload-identity-pools create github-pool \
+  --location=global \
+  --display-name="GitHub Actions Pool"
+
+# Create provider
+gcloud iam workload-identity-pools providers create-oidc github-provider \
+  --location=global \
+  --workload-identity-pool=github-pool \
+  --issuer-uri=https://token.actions.githubusercontent.com \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+  --attribute-condition="assertion.repository=='LouisLun/slack-deploy-cloud-run'"
+
+# Bind service account
+gcloud iam service-accounts add-iam-policy-binding $SA_EMAIL \
+  --role=roles/iam.workloadIdentityUser \
+  --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/attribute.repository/LouisLun/slack-deploy-cloud-run"
+```
+
+#### 4. Add GitHub repository secrets
+
+Go to **GitHub → repo → Settings → Secrets and variables → Actions** and add:
+
+| Secret | Value |
+|---|---|
+| `GCP_PROJECT_ID` | your GCP project ID |
+| `WIF_PROVIDER` | `projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/github-pool/providers/github-provider` |
+| `WIF_SERVICE_ACCOUNT` | `github-actions-sa@<PROJECT_ID>.iam.gserviceaccount.com` |
+
+### First Deploy (manual)
+
+Run this once to create the Cloud Run service with all environment variables. Subsequent deploys are handled by CI.
 
 ```bash
 PROJECT_ID=your-gcp-project-id
-IMAGE=gcr.io/$PROJECT_ID/slack-deploy-cloud-run
+REGION=asia-east1
+IMAGE=asia-east1-docker.pkg.dev/$PROJECT_ID/slack-deploy/slack-deploy-cloud-run:latest
 
-docker build -t $IMAGE .
-docker push $IMAGE
-```
-
-Or use Cloud Build:
-
-```bash
-gcloud builds submit --tag $IMAGE
-```
-
-### 2. Deploy to Cloud Run
-
-```bash
 gcloud run deploy slack-deploy-cloud-run \
   --image $IMAGE \
   --platform managed \
-  --region us-central1 \
+  --region $REGION \
   --allow-unauthenticated \
   --min-instances 1 \
   --max-instances 1 \
-  --set-env-vars "SLACK_SIGNING_SECRET=...,\
-SLACK_BOT_TOKEN=...,\
-GITHUB_CLIENT_ID=...,\
-GITHUB_CLIENT_SECRET=...,\
-GCS_BUCKET_NAME=...,\
+  --set-secrets "SLACK_SIGNING_SECRET=SLACK_SIGNING_SECRET:latest,\
+SLACK_BOT_TOKEN=SLACK_BOT_TOKEN:latest,\
+GITHUB_CLIENT_ID=GITHUB_CLIENT_ID:latest,\
+GITHUB_CLIENT_SECRET=GITHUB_CLIENT_SECRET:latest" \
+  --set-env-vars "GCS_BUCKET_NAME=<bucket>,\
 GCS_CONFIG_FILE_PATH=deploy-config.json,\
 APP_BASE_URL=https://<service-url>"
 ```
 
-> Use `--max-instances 1` to avoid OAuth state issues with the in-memory store.
-> For secrets, prefer `--set-secrets` with Secret Manager over `--set-env-vars`.
+> Use `--set-secrets` (Secret Manager) for sensitive values instead of `--set-env-vars`.
+> `--max-instances 1` is required because OAuth state is stored in-memory.
 
-### 3. Note the service URL
+### Get the service URL
 
 ```bash
 gcloud run services describe slack-deploy-cloud-run \
-  --region us-central1 \
+  --region asia-east1 \
   --format 'value(status.url)'
 ```
 
-Set this as `APP_BASE_URL` and update the GitHub OAuth App callback URL.
+Set this as `APP_BASE_URL` in the Cloud Run service and update the GitHub OAuth App callback URL.
+
+### CI/CD Flow
+
+```
+git push main
+  └─ GitHub Actions
+       ├─ Authenticate via Workload Identity Federation
+       ├─ docker build → asia-east1-docker.pkg.dev/.../slack-deploy-cloud-run:<sha>
+       ├─ docker push
+       └─ gcloud run deploy --image ...<sha>
+```
 
 ---
 
