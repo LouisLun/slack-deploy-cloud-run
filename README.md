@@ -204,7 +204,46 @@ gcloud iam service-accounts add-iam-policy-binding $SA_EMAIL \
   --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/attribute.repository/LouisLun/slack-deploy-cloud-run"
 ```
 
-#### 4. Add GitHub repository secrets
+#### 4. Create Secret Manager secrets
+
+Enable the API and create one secret per sensitive variable:
+
+```bash
+gcloud services enable secretmanager.googleapis.com
+
+echo -n "your-slack-signing-secret" | \
+  gcloud secrets create SLACK_SIGNING_SECRET --data-file=-
+
+echo -n "xoxb-your-slack-bot-token" | \
+  gcloud secrets create SLACK_BOT_TOKEN --data-file=-
+
+echo -n "your-github-client-id" | \
+  gcloud secrets create GITHUB_CLIENT_ID --data-file=-
+
+echo -n "your-github-client-secret" | \
+  gcloud secrets create GITHUB_CLIENT_SECRET --data-file=-
+```
+
+Grant the Cloud Run runtime service account access to read these secrets:
+
+```bash
+# Default Compute SA is used by Cloud Run unless a custom one is specified
+RUNTIME_SA=<PROJECT_NUMBER>-compute@developer.gserviceaccount.com
+
+for SECRET in SLACK_SIGNING_SECRET SLACK_BOT_TOKEN GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET; do
+  gcloud secrets add-iam-policy-binding $SECRET \
+    --member="serviceAccount:$RUNTIME_SA" \
+    --role="roles/secretmanager.secretAccessor"
+done
+```
+
+To update a secret value later:
+
+```bash
+echo -n "new-value" | gcloud secrets versions add SLACK_BOT_TOKEN --data-file=-
+```
+
+#### 5. Add GitHub repository secrets
 
 Go to **GitHub → repo → Settings → Secrets and variables → Actions** and add:
 
