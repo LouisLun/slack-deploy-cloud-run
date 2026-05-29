@@ -1,0 +1,23 @@
+{
+  "name": "slack-deploy-cloud-run",
+  "version": "1.0.0",
+  "description": "Slack slash command bot for GitHub deployment workflows on Cloud Run",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@google-cloud/storage": "^7.7.0",
+    "@slack/web-api": "^7.3.0",
+    "axios": "^1.7.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.19.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
