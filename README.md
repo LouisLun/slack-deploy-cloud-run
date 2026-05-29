@@ -151,7 +151,37 @@ Push to `main` triggers `.github/workflows/deploy.yml` automatically — it buil
 
 ### One-time GCP Setup
 
-#### 1. Create Artifact Registry repository
+#### 1. Create GCS bucket and upload config
+
+```bash
+BUCKET=your-deploy-config-bucket
+
+# Create bucket (single-region, no public access)
+gcloud storage buckets create gs://$BUCKET \
+  --location=asia-east1 \
+  --uniform-bucket-level-access
+
+# Upload the config file
+gcloud storage cp deploy-config.json gs://$BUCKET/deploy-config.json
+```
+
+Grant the Cloud Run runtime SA read access to the bucket:
+
+```bash
+RUNTIME_SA=<PROJECT_NUMBER>-compute@developer.gserviceaccount.com
+
+gcloud storage buckets add-iam-policy-binding gs://$BUCKET \
+  --member="serviceAccount:$RUNTIME_SA" \
+  --role="roles/storage.objectViewer"
+```
+
+To update the config later:
+
+```bash
+gcloud storage cp deploy-config.json gs://$BUCKET/deploy-config.json
+```
+
+#### 2. Create Artifact Registry repository
 
 ```bash
 gcloud artifacts repositories create slack-deploy \
